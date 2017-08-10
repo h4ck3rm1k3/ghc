@@ -3,7 +3,6 @@ import os
 import platform
 import subprocess
 import shutil
-
 import threading
 
 def strip_quotes(s):
@@ -47,6 +46,20 @@ def lndir(srcdir, dstdir):
             os.mkdir(dst)
             lndir(src, dst)
 
+# This function allows one to read in git notes from the commandline
+# and then breaks it into a list of dictionaries that can be parsed
+# later on in the testing functions.
+# I wanted to put it in perf_notes.py but couldn't figure out a nice way to do that.
+def parse_git_notes(namespace, commit='HEAD'):
+    logFields = ['test_env','test','way','metric','value','commit']
+
+    log = subprocess.check_output(['git', 'notes', '--ref=' + namespace, 'show', commit]).decode('utf-8')
+    log = log.strip('\n').split('\n')
+    log = [line.strip('\t').split('\t') for line in log]
+    [x.append(commit) for x in log]
+    log = [dict(zip(logFields, field)) for field in log]
+    return log
+
 # On Windows, os.symlink is not defined with Python 2.7, but is in Python 3
 # when using msys2, as GHC does. Unfortunately, only Administrative users have
 # the privileges necessary to create symbolic links by default. Consequently we
@@ -63,7 +76,7 @@ class Watcher(object):
     global pool
     global evt
     global sync_lock
-    
+
     def __init__(self, count):
         self.pool = count
         self.evt = threading.Event()
