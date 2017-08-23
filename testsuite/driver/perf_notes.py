@@ -6,7 +6,6 @@
 # This file will be a utility to help facilitate the comparison of performance
 # metrics across arbitrary commits. The file will produce a table comparing
 # metrics between measurements taken for given commits in the environment given
-
 # by --test-env.
 
 import argparse
@@ -256,6 +255,7 @@ for test in latest_commit:
 # Has no meaningful output if there is no commit to compare to.
 if not singleton_commit:
     header('percent')
+
     # Printing out percentages.
     for test in latest_commit:
         print("{:27}{:30}".format(test['test'], test['metric']) + commit_string(test['test'],'percentages'))
