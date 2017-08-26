@@ -267,16 +267,20 @@ simplTopBinds env0 binds0
         --
     simpl_binds :: SimplEnv -> [InBind] -> SimplM SimplEnv
     simpl_binds env []           = return env
-    simpl_binds env (bind:binds) = do { env' <- simpl_bind env bind
+    simpl_binds env (bind:binds) = do { env' <- simpl_bind1 env bind
                                       ; simpl_binds env' binds }
 
-    simpl_bind env bind | Just bind' <- maybeLoopify bind
-                        = simpl_bind env bind'
-    simpl_bind env (Rec pairs)  = simplRecBind env TopLevel Nothing pairs
-    simpl_bind env (NonRec b r) = do { (env', b') <- addBndrRules env b (lookupRecBndr env b)
-                                     ; simplRecOrTopPair env' TopLevel
-                                                         NonRecursive Nothing
-                                                         b b' r }
+    simpl_bind1 env bind = do
+        us <- getUniquesM
+        case maybeLoopify us bind of
+            Just bind' -> simpl_bind1 env bind'
+            Nothing -> simpl_bind2 env bind
+
+    simpl_bind2 env (Rec pairs)  = simplRecBind env TopLevel Nothing pairs
+    simpl_bind2 env (NonRec b r) = do { (env', b') <- addBndrRules env b (lookupRecBndr env b)
+                                      ; simplRecOrTopPair env' TopLevel
+                                                          NonRecursive Nothing
+                                                          b b' r }
 
 {-
 ************************************************************************
@@ -1133,14 +1137,19 @@ simplExprF1 env (Case scrut bndr _ alts) cont
              env''   = env `addLetFloats` env'
        ; rebuildCase env'' scrut'' bndr alts cont }
 
-simplExprF1 env (Let bind body) cont
-  | Just bind' <- maybeLoopify bind
-  = simplExprF1 env (Let bind' body) cont
+simplExprF1 env (Let bind body) cont = do
+        us <- getUniquesM
+        case maybeLoopify us bind of
+            Just bind' -> simplExprF1 env (Let bind' body) cont
+            Nothing -> simplExprF1Let env bind body cont
 
-simplExprF1 env (Let (Rec pairs) body) cont
+-- This is an ugly indirection to make a decision based on maybeLoopify, which
+-- needs the monadic getUniquesM. Should be cleaned up before merging.
+simplExprF1Let :: SimplEnv -> Bind InId -> InExpr -> SimplCont -> SimplM (SimplEnv, OutExpr)
+simplExprF1Let env (Rec pairs) body cont
   = simplRecE env pairs body cont
 
-simplExprF1 env (Let (NonRec bndr rhs) body) cont
+simplExprF1Let env  (NonRec bndr rhs) body cont
   | Type ty <- rhs    -- First deal with type lets (let a = Type ty in e)
   = ASSERT( isTyVar bndr )
     do { ty' <- simplType env ty
@@ -1670,8 +1679,8 @@ simplRecE env pairs body cont
 
 -- Is this a tail-recursive function that we want to loopify? Then
 -- lets loopify it and simplify that
-maybeLoopify :: InBind -> Maybe InBind
-maybeLoopify (Rec [(bndr, rhs)])
+maybeLoopify :: [Unique] -> InBind -> Maybe InBind
+maybeLoopify exitUniques (Rec [(bndr, rhs)])
   | Just (bndr', join_bndr, join_rhs) <- loopificationJoinPointBinding_maybe bndr rhs
   = do  { let Just arity = isJoinId_maybe join_bndr
         ; let (join_params, _join_body) = collectNBinders arity join_rhs
@@ -1680,11 +1689,11 @@ maybeLoopify (Rec [(bndr, rhs)])
                 | var <- join_params ]
             -- Some might be marked as dead (in the RHS), but there are not dead here
         ; let rhs' = mkLams join_params' $
-                     mkLetRec [(join_bndr,join_rhs)] $
+                     exitify exitUniques [(join_bndr,join_rhs)] $
                      mkVarApps (Var join_bndr) join_params'
         ; Just (NonRec bndr' rhs')
         }
-maybeLoopify _ = Nothing
+maybeLoopify _ _ = Nothing
 
 -- TODO: Move to a more appropriate module
 --
