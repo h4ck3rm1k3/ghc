@@ -53,6 +53,10 @@ import Pair
 import Util
 import ErrUtils
 import Module          ( moduleName, pprModuleName )
+import State
+import Unique
+import VarSet
+import CoreFVs
 
 {-
 The guts of the simplifier is in this module, but the driver loop for
@@ -1681,6 +1685,91 @@ maybeLoopify (Rec [(bndr, rhs)])
         ; Just (NonRec bndr' rhs')
         }
 maybeLoopify _ = Nothing
+
+-- TODO: Move to a more appropriate module
+--
+-- | Given a recursive group of a joinrec), identifies “exit paths” and binds them as
+-- join-points outside the joinrec.
+exitify :: [Unique] -> [(InId,InExpr)] -> (InExpr -> InExpr)
+exitify exitUniques pairs =
+    ASSERT (all (isJoinId . fst) pairs)
+    \body -> mkExitLets exits (mkLetRec pairs' body)
+  where
+    mkExitLets ((exitId, exitRhs):exits') = mkLetNonRec exitId exitRhs . mkExitLets exits'
+    mkExitLets [] = id
+
+    (exits,pairs') = (`evalState` (exitUniques, [])) $ do
+        pairs' <- forM pairs $ \(x,rhs) -> do
+            -- go past the lambdas
+            let (args, body) = collectNBinders (idJoinArity x) rhs
+            body' <- go args body
+            let rhs' = mkLams args body'
+            return (x, rhs')
+        exits <- gets snd
+        return (exits, pairs')
+
+    recursive_calls = mkVarSet $ map fst pairs
+
+    -- main working function. Goes through the RHS (tail-call positions only),
+    -- checks if there are no more recursive calls, if so, abstracts over
+    -- variables bound on the way and lifts it out as a join point.
+    --
+    -- Uses a state monad to track of the fresh uniques for the new join points,
+    -- and the floated binds
+    go :: [Var] -- ^ variables to abstract over
+       -> InExpr -- ^ current expression in tail position
+       -> State ([Unique], [(InId, InExpr)]) InExpr
+
+    go captured e
+        -- Do not touch an expression that is already a join call with no free variables
+        -- in the arguments
+        | (Var f, args) <- collectArgs e
+        , isJoinId f
+        , isEmptyVarSet (exprsFreeVars args `minusVarSet` mkVarSet captured)
+        = return e
+
+        -- Do not touch a boring expression
+        | is_exit, not is_interesting = return e
+
+        -- We have something to float out!
+        | is_exit = do
+            -- create an id for the exit path
+            u <- getUnique
+            let res_ty = exprType e
+                args = filter (`elemVarSet` fvs) captured
+                args_tys = map idType args
+                ty = mkFunTys args_tys res_ty
+                v = mkSysLocal (fsLit "exit") u ty `asJoinId` length args
+                rhs = mkLams args e
+                e' = mkVarApps (Var v) args
+            addExit v rhs
+            return e'
+      where
+        -- An exit expression has no recursive calls
+        is_exit = disjointVarSet fvs recursive_calls
+        -- An interesting exit expression has free variables from
+        -- outside the recursive group
+        is_interesting = not (isEmptyVarSet (fvs `minusVarSet` mkVarSet captured))
+        fvs = exprFreeVars e
+
+
+    go captured (Case scrut bndr ty alts) = do
+        alts' <- mapM (goAlt (bndr:captured)) alts
+        return $ Case scrut bndr ty alts'
+    go _ e = return e
+
+    goAlt captured (dc, pats, rhs) = do
+        rhs' <- go (pats ++ captured) rhs
+        return (dc, pats, rhs')
+
+    getUnique = do
+        (u:us, fs) <- get
+        put (us, fs)
+        return u
+
+    addExit v rhs = do
+        (us, fs) <- get
+        put (us, (v,rhs):fs)
 
 {-
 ************************************************************************
