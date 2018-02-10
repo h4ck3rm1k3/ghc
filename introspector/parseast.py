@@ -35,6 +35,7 @@ def prim_empty_array(l):
 relist = []
 for x in [
                 '([\-\/\.\w]+\.hs)',
+                '([\-\/\.\w]+\.hsc)',
                 '([\-\/\.\w]+\.hs-incl)',
                 '([\-\/\.\w]+\.x)',
                 '/tmp/([\-\/\.\w]+\.hspp)',
