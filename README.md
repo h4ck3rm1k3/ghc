@@ -1,3 +1,15 @@
+Hacking on The Glasgow Haskell Compiler
+============================
+
+1. ./boot
+2. ./configure
+3. use new 8.2.2 version via stack.yml
+4. compile to collect asts
+5. reparse.sh
+
+   find -name \*.dump-parsed-ast | xargs python introspector/parseast.py 
+
+
 The Glasgow Haskell Compiler
 ============================
 

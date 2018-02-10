@@ -1,0 +1,4 @@
+resolver: nightly-2018-01-29
+
+packages:
+  - compiler
